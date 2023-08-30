@@ -1,0 +1,97 @@
+const fs = require('fs');
+const readline = require('readline');
+const puppeteer = require('puppeteer');
+
+const rl = readline.createInterface({
+  input: process.stdin,
+  output: process.stdout
+});
+
+function askQuestion(query) {
+  return new Promise((resolve) => {
+    rl.question(query, (answer) => {
+      resolve(answer);
+      rl.pause();
+    });
+  });
+}
+
+async function main() {
+  const wikiWord = await askQuestion('Page name (WikiWord): ');
+  const wicktotal = await askQuestion('Number of wicks to check: ');
+  const MAX_LINKS = parseInt(wicktotal) || 50;
+
+  console.log(`Set MAX_LINKS to: ${MAX_LINKS}`);
+  console.log(`wikiWord: ${wikiWord}`);
+
+  const indexUrl = `https://tvtropes.org/pmwiki/relatedsearch.php?term=Main/${wikiWord}`;
+
+  const browser = await puppeteer.launch();
+  const page = await browser.newPage();
+
+  await page.goto(indexUrl);
+
+const inwicks = await page.evaluate(() => {
+    const startIdx = document.body.innerHTML.indexOf('non-search engine links');
+    const endIdx = document.body.innerHTML.indexOf('excluding discussions');
+    const html = document.body.innerHTML.substring(startIdx, endIdx);
+    const linkRegex = /\/pmwiki\/pmwiki\.php\/([a-zA-Z0-9]+\/[a-zA-Z0-9]+)/g;
+    return Array.from(html.matchAll(linkRegex)).map(x => x[1]);
+});
+
+inwicks.sort(() => Math.random() - 0.5);
+
+let localresult = '';
+let result = '';
+
+for (let i = 0; i < Math.min(inwicks.length, MAX_LINKS); i++) {
+    const wickpage = `https://tvtropes.org${inwicks[i]}?action=source`;
+    await page.goto(wickpage);
+
+    const patternBase = `[a-zA-Z0-9,\\.'{]*${wikiWord}`;
+    const pattern1 = new RegExp(`^\\* ${patternBase}`);
+    const pattern2 = new RegExp(`^\\*\\* ${patternBase}`);
+    const pattern3 = new RegExp(`${patternBase}`);
+    const pattern4 = new RegExp(`\\{\\{${wikiWord.substring(0, 2)}`);
+
+    const sourceText = await page.evaluate(() => {
+        const spanElement = document.querySelector('span[style*="font-family:Courier"]');
+        return spanElement ? spanElement.innerText : '';
+    });
+
+    const lines = sourceText.split('<br>');
+
+    function processLine(line, idx) {
+        if (pattern1.test(line)) {
+            result += `\n* ${inwicks[idx]}: ${line}`;
+            while (idx + 1 < lines.length && (lines[idx + 1].startsWith('**') || lines[idx + 1].startsWith('-->'))) {
+                idx++;
+                result += ` ${lines[idx]}`;
+            }
+            return true;
+
+        } else if (pattern2.test(line)) {
+            result += `\n* ${inwicks[idx]}: ${line}`;
+            while (idx + 1 < lines.length && (lines[idx + 1].startsWith('***') || lines[idx + 1].startsWith('-->'))) {
+                idx++;
+                result += ` ${lines[idx]}`;
+            }
+            return true;
+        } else if (pattern3.test(line)) {
+            result += `\n* ${inwicks[idx]}: ${line}`;
+            return true;
+        } else if (pattern4.test(line)) {
+            result += `\n* ${inwicks[idx]}: ${line}`;
+            return true;
+        }
+        return false;
+    }
+
+    lines.some((line, idx) => processLine(line, idx));
+}
+
+fs.writeFileSync('output.txt', result);
+  rl.close();
+}
+
+main();
